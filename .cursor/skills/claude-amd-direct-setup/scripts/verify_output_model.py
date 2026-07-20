@@ -4,10 +4,10 @@ from __future__ import annotations
 import json
 import sys
 
-SUPPORTED_DIRECT_MODELS = {
-    "claude-sonnet-4.6",
-    "claude-opus-4.6",
-}
+SUPPORTED_DIRECT_PREFIXES = (
+    "claude-sonnet-",
+    "claude-opus-",
+)
 
 
 def main() -> int:
@@ -44,7 +44,9 @@ def main() -> int:
         return 1
 
     unsupported_models = [
-        name for name in model_usage if name not in SUPPORTED_DIRECT_MODELS
+        name
+        for name in model_usage
+        if not name.startswith(SUPPORTED_DIRECT_PREFIXES)
     ]
     if unsupported_models:
         print(

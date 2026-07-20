@@ -124,6 +124,54 @@ Expected behavior:
 
 1. Inspect the `model` field in `~/.claude/settings.json`.
 2. If it contains aliases such as `opus[1m]` or `claude-opus-4.5[1m]`:
-   - change it back to `claude-sonnet-4.6` or `claude-opus-4.6`
+   - change it back to `sonnet` or `opus`
    - or let the wrapper normalize it automatically at startup
 3. Re-run a real `claude -p` verification request.
+
+## Example 6: Connection refused because the gateway resolves to localhost
+
+User request:
+
+```text
+Claude keeps retrying with Unable to connect to API (ConnectionRefused). Why?
+```
+
+Expected behavior:
+
+1. Do not assume the key or model is wrong if `claude-route` shows `custom_headers: set`.
+2. Check whether the AMD Gateway hostname is locally overridden:
+
+```bash
+getent ahosts llm-api.amd.com
+rg 'llm-api\.amd\.com' /etc/hosts /etc/cloud/templates/hosts.debian.tmpl 2>/dev/null || true
+```
+
+3. If it resolves to `127.0.0.1`, remove the local override because Claude is connecting to localhost port 443.
+4. Verify network reachability:
+
+```bash
+curl -I --connect-timeout 10 --max-time 20 https://llm-api.amd.com/Anthropic
+```
+
+5. Rerun `claude-route` and a real `claude -p --output-format json 'Reply with exactly OK'`.
+
+## Example 7: Claude auto-upgraded but the wrapper uses an old binary
+
+User request:
+
+```text
+Claude updated itself and now the wrapper seems broken or the version is stale.
+```
+
+Expected behavior:
+
+1. Compare the wrapper version and installed versions:
+
+```bash
+claude --version
+ls -l ~/.local/bin/claude ~/.local/bin/claude.real ~/.local/share/claude/versions/
+```
+
+2. If `claude.real` points at an old version, update it to the newest installed Claude binary or rerun the official installer and recreate the wrapper.
+3. Confirm `which claude` still resolves to the wrapper.
+4. Rerun route validation and a real `claude -p` request.

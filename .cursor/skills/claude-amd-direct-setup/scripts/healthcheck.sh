@@ -42,6 +42,19 @@ else
     status=1
 fi
 
+gateway_hosts="$(getent ahosts llm-api.amd.com 2>/dev/null || true)"
+if [ -n "${gateway_hosts}" ]; then
+    echo "llm-api.amd.com:"
+    printf '%s\n' "${gateway_hosts}"
+    if printf '%s\n' "${gateway_hosts}" | awk '{print $1}' | grep -qx '127.0.0.1'; then
+        echo "llm-api.amd.com resolves to 127.0.0.1; remove the local hosts override" >&2
+        status=1
+    fi
+else
+    echo "llm-api.amd.com: DNS lookup failed"
+    status=1
+fi
+
 if [ -n "${route_path}" ]; then
     route_json="$(claude-route)"
     printf '%s\n' "${route_json}"
@@ -51,7 +64,7 @@ import json
 import os
 import sys
 
-supported_models = {"claude-sonnet-4.6", "claude-opus-4.6"}
+supported_models = {"sonnet", "opus"}
 
 try:
     route = json.loads(os.environ["ROUTE_JSON"])

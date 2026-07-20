@@ -12,7 +12,7 @@ Provide a reusable, local-first workflow for connecting Claude Code directly to 
 - `claude` always goes through a wrapper before invoking the real Claude Code binary
 - `~/.claude/settings.json` keeps only `apiKeyHelper` and `model`
 - only the direct AMD Anthropic endpoint is used, with no local proxy fallback
-- only `claude-sonnet-4.6` and `claude-opus-4.6` are treated as supported direct models
+- only `sonnet` and `opus` are treated as supported settings model aliases
 - validation always includes a real `claude -p` request, not just route inspection or a healthcheck
 - if the official installer downloads the binary but hangs during the final install step, setup can still be completed by wiring the downloaded binary into the wrapper flow
 
@@ -59,7 +59,7 @@ export ANTHROPIC_CUSTOM_HEADERS="Ocp-Apim-Subscription-Key: ${AMD_LLM_GATEWAY_KE
 7. The second line is critical. `ANTHROPIC_CUSTOM_HEADERS` must be a single string, not JSON.
 8. Do not rely only on the default `Authorization` or `X-Api-Key` behavior from `apiKeyHelper`.
 9. Keep `~/.claude/settings.json` limited to `apiKeyHelper` and `model`.
-10. Default to `claude-sonnet-4.6`. Use `claude-opus-4.6` as the high-tier direct model.
+10. Default to `sonnet`. Use `opus` as the high-tier direct model.
 11. If `~/.local/bin` appears earlier in `PATH`, make the `claude` binary there point to the wrapper as well.
 12. Never claim success from `claude-route` or healthcheck alone. Run real `claude -p` validation.
 
@@ -130,7 +130,7 @@ export AMD_LLM_GATEWAY_KEY="PASTE_YOUR_KEY_HERE"
 ```json
 {
   "apiKeyHelper": "bash -lc 'printf %s \"$AMD_LLM_GATEWAY_KEY\"'",
-  "model": "claude-sonnet-4.6"
+  "model": "sonnet"
 }
 ```
 
@@ -148,9 +148,9 @@ The wrapper should do all of the following:
 
 Minimum alias normalization rules:
 
-- `opus[1m]` -> `claude-opus-4.6`
-- `claude-opus-4.5[1m]` -> `claude-opus-4.6`
-- any other unknown value -> `claude-sonnet-4.6`
+- `opus[1m]` -> `opus`
+- `claude-opus-4.5[1m]` -> `opus`
+- any other unknown value -> `sonnet`
 
 ### Step 6: Ensure the real entrypoint is the wrapper
 
@@ -182,7 +182,7 @@ Expected direct-mode indicators:
 
 - `"mode": "direct"`
 - `"backend": "claude-amd-anthropic"`
-- `"normalized_model": "claude-sonnet-4.6"` or `"claude-opus-4.6"`
+- `"normalized_model": "sonnet"` or `"opus"`
 
 2. Then run a real text request:
 
@@ -207,7 +207,7 @@ claude -p --output-format json --allowedTools Bash -- \
 Do not stop at healthcheck. The setup is only truly complete when:
 
 - the text request succeeds
-- `modelUsage` reports a supported 4.6 model
+- `modelUsage` reports a Claude model for the selected alias, such as `claude-sonnet-5`
 - the Bash tool call succeeds
 
 ### Step 8: Fallback when the user does not provide the key
@@ -222,8 +222,10 @@ Do not invent a fake key. Provide placeholder-only guidance and explicitly menti
 
 Use only these exact model names:
 
-- `claude-sonnet-4.6`
-- `claude-opus-4.6`
+- `sonnet`
+- `opus`
+
+A successful `claude -p --output-format json ...` request may report the resolved backend model in `modelUsage`, for example `claude-sonnet-5`.
 
 Do not treat interactive `/model` as the final source of truth. For this direct setup, `~/.claude/settings.json` is the only reliable model switch location.
 
@@ -250,7 +252,7 @@ Do not treat interactive `/model` as the final source of truth. For this direct 
    - if the binary works, connect it to `claude.real` and continue
 
 5. `~/.claude/settings.json` was polluted by an old `/model` selection
-   - change it back to `claude-sonnet-4.6` or `claude-opus-4.6`
+   - change it back to `sonnet` or `opus`
    - or let the wrapper normalize it automatically at startup
 
 6. `claude-route` shows `settings_parse_error`
@@ -264,6 +266,20 @@ Do not treat interactive `/model` as the final source of truth. For this direct 
 8. healthcheck passes but Claude tool use still fails
    - keep going with real `claude -p` and Bash tool validation
    - without that, setup is not complete
+
+9. `Unable to connect to API (ConnectionRefused)`
+   - first check DNS and local host overrides:
+     - `getent ahosts llm-api.amd.com`
+     - `rg 'llm-api\.amd\.com' /etc/hosts /etc/cloud/templates/hosts.debian.tmpl 2>/dev/null || true`
+   - if `llm-api.amd.com` resolves to `127.0.0.1`, remove the local override; Claude is trying to connect to localhost port 443 instead of AMD Gateway
+   - then verify network reachability with `curl -I --connect-timeout 10 --max-time 20 https://llm-api.amd.com/Anthropic`
+   - if `/etc/hosts` is managed by cloud-init, make the fix in the cloud-init hosts template as well so it survives reboot
+
+10. Claude auto-upgraded but the wrapper still launches an old binary
+   - compare `claude --version` through the wrapper with the newest version under `~/.local/share/claude/versions/`
+   - inspect where the wrapper forwards execution, usually `~/.local/bin/claude.real`
+   - if `claude.real` points at an old version, update the symlink to the newest installed Claude binary, or rerun the official installer and then recreate the wrapper
+   - after rewiring, rerun `claude-route` and a real `claude -p --output-format json 'Reply with exactly OK'`
 
 ## Manual Fallback Snippet
 
@@ -292,6 +308,6 @@ Never write the real key into project files.
 - [ ] `ANTHROPIC_CUSTOM_HEADERS` is a string, not JSON
 - [ ] `which claude` resolves to the wrapper
 - [ ] if `~/.local/bin` is earlier in `PATH`, it also points to the wrapper
-- [ ] `claude-route` reports direct mode and a supported 4.6 model
+- [ ] `claude-route` reports direct mode and the `sonnet` or `opus` settings alias
 - [ ] the real `claude -p` text request succeeds
 - [ ] the Bash tool call succeeds, or any remaining limitation is stated clearly
