@@ -310,8 +310,7 @@ def start_worker(
 
     with log_path.open("ab") as log_handle:
         proc = subprocess.Popen(
-            [title, "-c", loader, str(gpu.index), str(fraction), title],
-            executable=torch_python,
+            [torch_python, "-c", loader, str(gpu.index), str(fraction), title],
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
