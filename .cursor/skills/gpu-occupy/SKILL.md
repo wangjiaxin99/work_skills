@@ -1,68 +1,101 @@
 ---
 name: gpu-occupy
-description: Occupy a requested number of idle GPUs with scheduler-like worker processes. Use when the user says "帮我占用x张gpu", "占用 GPU", "占用几张卡", "reserve GPUs", "hold GPUs", or asks to scan idle GPUs and start GPU load without exposing gpu_stress.py in the process command line.
+description: Occupy requested idle GPUs with scheduler-like worker processes. Use when the user says "帮我占用x张gpu", "占用前x张卡", "占用 GPU", "占用几张卡", "reserve GPUs", "hold GPUs", or asks to scan idle GPUs and start GPU load without exposing gpu_stress.py in the process command line.
 ---
 
 # GPU Occupy
 
 ## Purpose
 
-Scan for idle GPUs, pick the requested number of cards, and start long-running CUDA workers that reserve GPU memory and keep compute busy. The worker behavior follows the local `gpu_stress.py` pattern: reserve about 80% of each selected GPU's memory, allocate large matrices, and continuously run `matmul`.
+Occupy requested GPUs with long-running worker processes that reserve about 80% VRAM and keep the device busy. On this ROCm machine, prefer the container launcher so the workers run inside `sglang-qwen35-397-jiaxwang0722-2` and process listings show only scheduler-like names.
 
 ## When to Use
 
 Use this skill when the user asks in Chinese or English to occupy, reserve, hold, or stress one or more GPUs, especially requests like:
 
 - "帮我占用2张gpu"
-- "占用4张卡"
+- "占用前4张卡"
 - "scan idle GPUs and hold 1 GPU"
 
-## Commands
+## Preferred ROCm Container Workflow
 
-From the `work_skills` repository root, start workers with:
+Default container:
 
 ```bash
-python3 .cursor/skills/gpu-occupy/scripts/sglang_scheduler_tp2.py 2
+sglang-qwen35-397-jiaxwang0722-2
+```
+
+From the `work_skills` repository root, occupy the first N physical GPUs with:
+
+```bash
+.cursor/skills/gpu-occupy/scripts/occupy_rocm_container.sh 4 --first
+```
+
+Equivalent explicit form:
+
+```bash
+.cursor/skills/gpu-occupy/scripts/occupy_rocm_container.sh --gpus 0,1,2,3
 ```
 
 Useful options:
 
 ```bash
+.cursor/skills/gpu-occupy/scripts/occupy_rocm_container.sh --container sglang-qwen35-397-jiaxwang0722-2 --gpus 0,1,2,3
+.cursor/skills/gpu-occupy/scripts/occupy_rocm_container.sh --status
+.cursor/skills/gpu-occupy/scripts/occupy_rocm_container.sh --stop
+```
+
+## Process Naming
+
+Workers must show only the command-line title, without GPU id, fraction, script names, or source file names. Required display:
+
+```text
+sglang::scheduler_TP0
+sglang::scheduler_TP1
+sglang::scheduler_TP2
+sglang::scheduler_TP3
+```
+
+For `TPn`, `n` is the selected-card order for this launch:
+
+- first selected GPU -> `TP0`
+- second selected GPU -> `TP1`
+- third selected GPU -> `TP2`
+
+The ROCm launcher passes GPU id, fraction, and title through environment variables, then starts the compiled HIP worker with `exec -a`, so tools such as `nvitop` do not display extra arguments like `1 0.80 sglang::scheduler_TP1`.
+
+## Operational Rules
+
+1. If the user says "前4张卡", use physical GPUs `0,1,2,3`; do not reorder by free-memory ranking.
+2. Before starting, stop existing workers if the user asks to replace them.
+3. If the target container is stopped, start it with `docker start`.
+4. Compile `scripts/rocm_hip_worker.cpp` inside the target container with `/opt/rocm/bin/hipcc`.
+5. Write container worker records under `/tmp/sglang_scheduler_tp2/pids.jsonl` and logs under `/tmp/sglang_scheduler_tp2/logs/`.
+6. Do not run `/home/jiaxwang/workspace/gpu_stress.py` directly for the ROCm/container workflow.
+
+## Validation
+
+After starting workers, validate both process names and GPU occupancy:
+
+```bash
+docker exec sglang-qwen35-397-jiaxwang0722-2 bash -lc 'ps -eo pid,stat,cmd | grep "sglang::scheduler_TP" | grep -v grep'
+rocm-smi --showuse --showmemuse
+```
+
+Expected result for occupying the first 4 cards:
+
+- GPU `0-3` show high GPU utilization and about 80% VRAM use
+- GPU `4-7` are unchanged
+- process command lines show only `sglang::scheduler_TP0` through `sglang::scheduler_TP3`
+
+## PyTorch Fallback
+
+`scripts/sglang_scheduler_tp2.py` remains available for CUDA/PyTorch environments:
+
+```bash
 python3 .cursor/skills/gpu-occupy/scripts/sglang_scheduler_tp2.py 2 --fraction 0.80
-python3 .cursor/skills/gpu-occupy/scripts/sglang_scheduler_tp2.py 2 --python /path/to/python-with-torch
-GPU_OCCUPY_PYTHON=/path/to/python-with-torch python3 .cursor/skills/gpu-occupy/scripts/sglang_scheduler_tp2.py 2
 python3 .cursor/skills/gpu-occupy/scripts/sglang_scheduler_tp2.py --status
 python3 .cursor/skills/gpu-occupy/scripts/sglang_scheduler_tp2.py --stop
 ```
 
-## Workflow
-
-1. Parse the requested GPU count from the user request.
-2. Run the launcher from `/home/jiaxwang/workspace/work_skills`.
-3. Let the launcher find a Python with `torch.cuda`, scan GPUs with `nvidia-smi` or PyTorch fallback, choose idle cards, and start detached workers.
-4. Report selected GPU IDs, PIDs, and the log directory to the user.
-5. Do not run `/home/jiaxwang/workspace/gpu_stress.py` directly for this workflow.
-
-## Process Naming
-
-Workers are launched with command-line titles in the form `sglang::scheduler_TPn` so process listings do not expose the original `gpu_stress.py` filename. The `n` value is the selected-card order for this launch: first selected GPU -> `TP0`, second -> `TP1`, third -> `TP2`, and so on. The process is intentionally not hidden: PIDs are recorded under `~/.cache/sglang_scheduler_tp2/pids.jsonl`, and logs are written under `~/.cache/sglang_scheduler_tp2/logs/`.
-
-## Idle GPU Selection
-
-Default selection treats a GPU as idle when `nvidia-smi` is available:
-
-- GPU utilization is at or below 5%
-- used memory is at or below 15% of total memory
-
-If `nvidia-smi` is unavailable, the launcher falls back to PyTorch free-memory checks and treats utilization as unknown/0. If not enough idle GPUs are available, report the current GPU usage and do not start a partial set unless the user asks for a smaller number.
-
-## Validation
-
-After starting workers, check:
-
-```bash
-nvidia-smi
-python3 .cursor/skills/gpu-occupy/scripts/sglang_scheduler_tp2.py --status
-```
-
-Use `--stop` to clean up workers started by this launcher. If no default Python has `torch.cuda`, pass `--python /path/to/python-with-torch` or set `GPU_OCCUPY_PYTHON`.
+Use the ROCm container workflow first on AMD/ROCm hosts.
