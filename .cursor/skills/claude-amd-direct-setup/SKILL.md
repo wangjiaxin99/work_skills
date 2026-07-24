@@ -10,7 +10,7 @@ description: Install, configure, repair, and verify Claude Code against AMD LLM 
 Provide a reusable, local-first workflow for connecting Claude Code directly to AMD LLM Gateway. The intended end state is:
 
 - `claude` always goes through a wrapper before invoking the real Claude Code binary
-- `~/.claude/settings.json` keeps only `apiKeyHelper` and `model`
+- `~/.claude/settings.json` keeps Claude Code-managed fields while the wrapper enforces `apiKeyHelper` and `model`
 - only the direct AMD Anthropic endpoint is used, with no local proxy fallback
 - only `sonnet` and `opus` are treated as supported settings model aliases
 - validation always includes a real `claude -p` request, not just route inspection or a healthcheck
@@ -49,26 +49,28 @@ Required conditions:
 curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-6. The wrapper must export both of these variables:
+6. The wrapper must export these variables:
 
 ```bash
 export ANTHROPIC_BASE_URL="https://llm-api.amd.com/Anthropic"
 export ANTHROPIC_CUSTOM_HEADERS="Ocp-Apim-Subscription-Key: ${AMD_LLM_GATEWAY_KEY}"
+export CLAUDE_CODE_DISABLE_ADVISOR_TOOL="1"
 ```
 
 7. The second line is critical. `ANTHROPIC_CUSTOM_HEADERS` must be a single string, not JSON.
-8. Do not rely only on the default `Authorization` or `X-Api-Key` behavior from `apiKeyHelper`.
-9. Keep `~/.claude/settings.json` limited to `apiKeyHelper` and `model`.
-10. Default to `sonnet`. Use `opus` as the high-tier direct model.
-11. If `~/.local/bin` appears earlier in `PATH`, make the `claude` binary there point to the wrapper as well.
-12. Never claim success from `claude-route` or healthcheck alone. Run real `claude -p` validation.
+8. The advisor env var is required for AMD Gateway direct mode because some Claude Code versions add `advisor-tool-2026-03-01` to the `anthropic-beta` header, which AMD Gateway rejects.
+9. Do not rely only on the default `Authorization` or `X-Api-Key` behavior from `apiKeyHelper`.
+10. Preserve unrelated `~/.claude/settings.json` fields. The wrapper may enforce `apiKeyHelper` and `model`, but it must not rewrite the file to only those fields because Claude Code stores other state there, including plugin enablement and permission prompts.
+11. Default to `sonnet`. Use `opus` as the high-tier direct model.
+12. If `~/.local/bin` appears earlier in `PATH`, make the `claude` binary there point to the wrapper as well.
+13. Never claim success from `claude-route` or healthcheck alone. Run real `claude -p` validation.
 
 ## Preferred Local Layout
 
 - `~/.bashrc`
   - stores only `export AMD_LLM_GATEWAY_KEY="PASTE_YOUR_KEY_HERE"`
 - `~/.claude/settings.json`
-  - stores only `apiKeyHelper` and the selected direct model
+  - stores `apiKeyHelper`, the selected direct model, and other Claude Code-managed fields
 - `/usr/local/bin/claude`
   - wrapper that loads environment, normalizes bad aliases, and forwards to the real Claude binary
 - `/usr/local/bin/claude-route`
@@ -136,6 +138,8 @@ export AMD_LLM_GATEWAY_KEY="PASTE_YOUR_KEY_HERE"
 
 Do not add extra auth fields. Model switching should happen here and nowhere else.
 
+If a wrapper repairs or normalizes this file, it must load the existing JSON object, update only `apiKeyHelper` and `model`, and then write the merged object back. Do not replace the whole file with only those two fields.
+
 ### Step 5: Wrapper requirements
 
 The wrapper should do all of the following:
@@ -143,6 +147,7 @@ The wrapper should do all of the following:
 - if the current shell does not already have `AMD_LLM_GATEWAY_KEY`, try loading `~/.bashrc`
 - export `ANTHROPIC_BASE_URL`
 - export `ANTHROPIC_CUSTOM_HEADERS`
+- export `CLAUDE_CODE_DISABLE_ADVISOR_TOOL="1"`
 - normalize bad persisted model aliases into supported direct models
 - `exec` into the real Claude Code binary
 
@@ -281,6 +286,18 @@ Do not treat interactive `/model` as the final source of truth. For this direct 
    - if `claude.real` points at an old version, update the symlink to the newest installed Claude binary, or rerun the official installer and then recreate the wrapper
    - after rewiring, rerun `claude-route` and a real `claude -p --output-format json 'Reply with exactly OK'`
 
+11. `claude plugin enable ...` says success but `claude plugin list` still shows `enabled: false`
+   - inspect the wrapper first; it may be rewriting `~/.claude/settings.json` and deleting Claude Code-managed fields
+   - fix the wrapper so it preserves existing settings keys and only updates `apiKeyHelper` and `model`
+   - rerun `claude plugin enable <plugin> --scope user`
+   - start a new Claude Code session; enabled plugin skills are loaded at session startup
+
+12. `Unexpected value(s) advisor-tool-2026-03-01 for the anthropic-beta header`
+   - this comes from Claude Code's experimental advisor tool, not from `ANTHROPIC_CUSTOM_HEADERS`
+   - AMD Gateway direct mode may reject that beta header before the request reaches the model
+   - verify with `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 claude -p --output-format json 'Reply with exactly OK'`
+   - fix the wrapper by exporting `CLAUDE_CODE_DISABLE_ADVISOR_TOOL="1"` before `exec`ing the real Claude binary
+
 ## Manual Fallback Snippet
 
 If the user does not want to share the real key, use only a placeholder:
@@ -303,8 +320,8 @@ Never write the real key into project files.
 - [ ] no real secret was added to repository files
 - [ ] the user was asked for the key before secret-bearing local edits
 - [ ] Claude Code was installed before wrapper configuration
-- [ ] `~/.claude/settings.json` keeps only `apiKeyHelper` and `model`
-- [ ] the wrapper exports both `ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS`
+- [ ] `~/.claude/settings.json` preserves unrelated Claude Code-managed fields while enforcing `apiKeyHelper` and `model`
+- [ ] the wrapper exports `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, and `CLAUDE_CODE_DISABLE_ADVISOR_TOOL`
 - [ ] `ANTHROPIC_CUSTOM_HEADERS` is a string, not JSON
 - [ ] `which claude` resolves to the wrapper
 - [ ] if `~/.local/bin` is earlier in `PATH`, it also points to the wrapper
